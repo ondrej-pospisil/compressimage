@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Optimizer s WebP a ZIPem</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root { --bg: #121212; --card: #1e1e1e; --text: #e0e0e0; --accent: #00ca9d; }
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; align-items: center; padding: 40px; margin: 0; min-height: 100vh; }
+
+        h1 { margin-top: 0; }
+        p { margin-bottom: 20px; text-align: center; color: #aaa; }
+
+        /* Celoobrazovkový overlay při tažení fotek */
+        #dragOverlay {
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 202, 157, 0.9);
+            color: #121212;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 3rem;
+            font-weight: bold;
+            z-index: 9999;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease-in-out;
+        }
+        body.drag-active #dragOverlay {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        .upload-area { margin-bottom: 30px; text-align: center; }
+
+        .controls { display: flex; gap: 20px; align-items: center; justify-content: center; background: var(--card); padding: 15px 25px; border-radius: 10px; flex-wrap: wrap; margin-bottom: 20px; width: 100%; max-width: 800px; }
+        input[type="range"] { accent-color: var(--accent); cursor: pointer; }
+        select, input[type="number"] { padding: 5px; border-radius: 5px; background: #333; color: white; border: 1px solid #555; font-size: 1rem; }
+
+        .btn { background: var(--accent); color: white; border: none; padding: 12px 25px; border-radius: 5px; cursor: pointer; text-decoration: none; font-weight: bold; font-size: 1rem; transition: 0.2s; display: inline-block; }
+        .btn:hover { background: #00a883; }
+        .btn:disabled { background: #555; cursor: not-allowed; }
+
+        .actions-bar { display: flex; gap: 15px; width: 100%; max-width: 1200px; justify-content: center; margin-top: 10px; }
+
+        #results { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 20px; width: 100%; max-width: 1200px; margin-top: 20px; }
+        .img-card { background: var(--card); padding: 15px; border-radius: 10px; text-align: center; border: 1px solid #333; display: flex; flex-direction: column; justify-content: space-between; }
+        .img-card img { width: 100%; height: 150px; object-fit: cover; border-radius: 5px; margin-bottom: 10px; background: #2a2a2a; }
+        .stats { font-size: 0.85rem; color: #aaa; margin-bottom: 15px; line-height: 1.4; }
+
+        .stats strong {
+            display: block;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            word-break: break-all;
+            margin-bottom: 5px;
+            color: #fff;
+        }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div id="dragOverlay">📥 Pusť fotky kamkoliv sem...</div>
+
+    <h1>🖼️ Web Optimizer</h1>
+
+    <div class="upload-area">
+        <p>Hoď fotky kamkoliv na tuto stránku, nebo na ně klikni:</p>
+        <button id="selectFilesBtn" class="btn">Vybrat fotky z disku</button>
+        <input type="file" id="fileInput" multiple accept="image/*" class="hidden">
+    </div>
+
+    <div class="controls">
+        <label>Formát: </label>
+        <select id="formatSelect">
+            <option value="image/webp" selected>WebP</option>
+            <option value="image/jpeg">JPEG</option>
+            <option value="image/png">PNG</option>
+        </select>
+
+        <div id="qualityWrapper">
+            <label>Kvalita: <span id="qVal">75</span>%</label>
+            <input type="range" id="quality" min="1" max="100" value="75">
+        </div>
+
+        <label>Max šířka: </label>
+        <input type="number" id="maxWidth" value="1600" style="width: 80px;"> px
+    </div>
+
+    <div class="actions-bar">
+        <button id="clearBtn" class="btn hidden" style="background: #e74c3c;">Vymazat vše</button>
+        <button id="downloadZipBtn" class="btn hidden">📦 Stáhnout vše do ZIPu</button>
+    </div>
+
+    <div id="results"></div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const selectFilesBtn = document.getElementById('selectFilesBtn');
+        const results = document.getElementById('results');
+        const qualityInput = document.getElementById('quality');
+        const qVal = document.getElementById('qVal');
+        const maxWidthInput = document.getElementById('maxWidth');
+        const formatSelect = document.getElementById('formatSelect');
+        const qualityWrapper = document.getElementById('qualityWrapper');
+        const downloadZipBtn = document.getElementById('downloadZipBtn');
+        const clearBtn = document.getElementById('clearBtn');
+
+        let processedBlobs = [];
+
+        // Globální Drag & Drop logika pro celou stránku
+        let dragCounter = 0;
+
+        document.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            dragCounter++;
+            document.body.classList.add('drag-active');
+        });
+
+        document.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dragCounter--;
+            if (dragCounter === 0) {
+                document.body.classList.remove('drag-active');
+            }
+        });
+
+        document.addEventListener('dragover', (e) => {
+            e.preventDefault(); // Nutné pro povolení události drop
+        });
+
+        document.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dragCounter = 0;
+            document.body.classList.remove('drag-active');
+            if (e.dataTransfer.files.length > 0) {
+                handleFiles(e.dataTransfer.files);
+            }
+        });
+
+        // Manuální výběr souborů
+        selectFilesBtn.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => handleFiles(e.target.files);
+
+        // Skrytí kvality u PNG
+        formatSelect.addEventListener('change', (e) => {
+            if (e.target.value === 'image/png') {
+                qualityWrapper.classList.add('hidden');
+            } else {
+                qualityWrapper.classList.remove('hidden');
+            }
+        });
+
+        qualityInput.oninput = () => qVal.innerText = qualityInput.value;
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function handleFiles(files) {
+            Array.from(files).forEach(file => {
+                if (!file.type.startsWith('image/')) return;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.src = e.target.result;
+                    img.onload = () => compress(img, file);
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function compress(img, file) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            const maxW = parseInt(maxWidthInput.value);
+            const scale = Math.min(maxW / img.width, 1);
+
+            canvas.width = img.width * scale;
+            canvas.height = img.height * scale;
+
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+            const format = formatSelect.value;
+            const quality = qualityInput.value / 100;
+
+            let ext = 'jpg';
+            if (format === 'image/png') ext = 'png';
+            if (format === 'image/webp') ext = 'webp';
+
+            const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
+            const newName = `opt_${baseName}.${ext}`;
+
+            canvas.toBlob((blob) => {
+                const url = URL.createObjectURL(blob);
+
+                processedBlobs.push({ name: newName, blob: blob });
+
+                renderCard(url, newName, file.size, blob.size);
+                updateActionsBar();
+            }, format, quality);
+        }
+
+        function renderCard(url, name, oldSize, newSize) {
+            let savingText = "";
+            if (newSize < oldSize) {
+                const saving = Math.round((1 - (newSize / oldSize)) * 100);
+                savingText = `<span style="color: var(--accent); font-weight: bold;">Úspora: ${saving}%</span>`;
+            } else {
+                savingText = `<span style="color: #e74c3c; font-weight: bold;">Větší o: ${formatBytes(newSize - oldSize)}</span>`;
+            }
+
+            const card = document.createElement('div');
+            card.className = 'img-card';
+            card.innerHTML = `
+                <div>
+                    <img src="${url}">
+                    <div class="stats">
+                        <strong>${name}</strong>
+                        ${formatBytes(oldSize)} → ${formatBytes(newSize)}<br>
+                        ${savingText}
+                    </div>
+                </div>
+                <a href="${url}" download="${name}" class="btn" style="padding: 8px 10px; font-size: 0.9rem; width: 100%;">Uložit</a>
+            `;
+            results.prepend(card);
+        }
+
+        function updateActionsBar() {
+            if (processedBlobs.length > 0) {
+                downloadZipBtn.classList.remove('hidden');
+                clearBtn.classList.remove('hidden');
+            } else {
+                downloadZipBtn.classList.add('hidden');
+                clearBtn.classList.add('hidden');
+            }
+        }
+
+        clearBtn.onclick = () => {
+            results.innerHTML = '';
+            processedBlobs = [];
+            fileInput.value = '';
+            updateActionsBar();
+        };
+
+        downloadZipBtn.onclick = async () => {
+            downloadZipBtn.innerText = "⏳ Balím do ZIPu...";
+            downloadZipBtn.disabled = true;
+
+            const zip = new JSZip();
+            processedBlobs.forEach(file => {
+                zip.file(file.name, file.blob);
+            });
+
+            const content = await zip.generateAsync({ type: "blob" });
+            const url = URL.createObjectURL(content);
+
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "optimalizovane_fotky.zip";
+            a.click();
+
+            URL.revokeObjectURL(url);
+            downloadZipBtn.innerText = "📦 Stáhnout vše do ZIPu";
+            downloadZipBtn.disabled = false;
+        };
+    </script>
+</body>
+</html>
